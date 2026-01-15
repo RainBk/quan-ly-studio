@@ -14,9 +14,12 @@ function App() {
   const [showModal, setShowModal] = useState(false);
   const [modalType, setModalType] = useState('');
   const [selectedItem, setSelectedItem] = useState(null);
+  
+  // TRẠNG THÁI XỬ LÝ (Khóa nút để tránh lỗi)
   const [isUploading, setIsUploading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
-  // KẾT NỐI DỮ LIỆU
+  // 1. KẾT NỐI DỮ LIỆU
   useEffect(() => {
     const unsubProd = onSnapshot(query(collection(db, "products"), orderBy("createdAt", "desc")), (s) => setProducts(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     const unsubBook = onSnapshot(query(collection(db, "bookings"), orderBy("createdAt", "desc")), (s) => setBookings(s.docs.map(d => ({ id: d.id, ...d.data() }))));
@@ -24,7 +27,7 @@ function App() {
     return () => { unsubProd(); unsubBook(); unsubStaff(); };
   }, []);
 
-  // XỬ LÝ ẢNH (Nén ảnh thông minh)
+  // 2. XỬ LÝ ẢNH (Bản Siêu Tốc - Nén mạnh để upload nhanh)
   const resizeImage = (file) => {
     return new Promise((resolve) => {
       const reader = new FileReader();
@@ -34,13 +37,34 @@ function App() {
         img.src = e.target.result;
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 800;
-          const scale = MAX_WIDTH / img.width;
-          canvas.width = MAX_WIDTH;
-          canvas.height = img.height * scale;
+          
+          // --- CẤU HÌNH TỐI ƯU ---
+          const MAX_WIDTH = 600; // Giảm xuống 600px (đủ nét cho điện thoại)
+          
+          let width = img.width;
+          let height = img.height;
+
+          // Tính toán tỷ lệ
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_WIDTH) {
+              width *= MAX_WIDTH / height;
+              height = MAX_WIDTH;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          
           const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/jpeg', 0.7));
+          ctx.drawImage(img, 0, 0, width, height);
+          
+          // Nén chất lượng xuống 60% -> File siêu nhẹ, upload cực nhanh
+          resolve(canvas.toDataURL('image/jpeg', 0.6)); 
         }
       };
     });
@@ -49,26 +73,33 @@ function App() {
   const handleImage = async (e) => {
     const file = e.target.files[0];
     if (file) {
-      const loadToast = toast.loading("Đang xử lý ảnh...");
       setIsUploading(true);
+      const loadToast = toast.loading("Đang xử lý ảnh...");
       try {
         const compressed = await resizeImage(file);
         setSelectedItem({ ...selectedItem, image: compressed });
         toast.dismiss(loadToast);
         toast.success("Ảnh đã sẵn sàng!");
       } catch (error) {
+        toast.dismiss(loadToast);
         toast.error("Lỗi ảnh!");
       }
       setIsUploading(false);
     }
   };
 
-  // LƯU DỮ LIỆU
+  // 3. LƯU DỮ LIỆU (Có khóa nút bấm)
   const handleSave = async (e) => {
     e.preventDefault();
+    
+    // Nếu đang lưu hoặc đang xử lý ảnh thì chặn không cho bấm tiếp
+    if (isSaving || isUploading) return; 
+
     const form = e.target;
     let data = { createdAt: Date.now() };
-    const loadToast = toast.loading("Đang lưu lên hệ thống...");
+
+    setIsSaving(true); // KHÓA NÚT
+    const loadToast = toast.loading("Đang đẩy lên máy chủ...");
 
     try {
         if (modalType === 'products') {
@@ -81,16 +112,20 @@ function App() {
             data = { ...data, name: form.name.value, role: form.role.value, salary: Number(form.salary.value), commission: Number(form.commission.value) };
             await addDoc(collection(db, "staffs"), data);
         }
+        
         setShowModal(false); 
         setSelectedItem(null); 
         toast.dismiss(loadToast);
-        toast.success("Thành công! 🎉");
+        toast.success("Xong! Dữ liệu đã an toàn. 🚀");
     } catch (err) {
         toast.dismiss(loadToast);
         toast.error("Lỗi: " + err.message);
     }
+    
+    setIsSaving(false); // MỞ KHÓA
   };
 
+  // 4. GIAO DIỆN
   return (
     <div className="flex h-screen bg-gray-50 font-sans overflow-hidden text-sm md:text-base select-none">
       <Toaster position="top-center" />
@@ -207,7 +242,7 @@ function App() {
         <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
            {modalType === 'qr' && selectedItem ? (
                <div className="bg-white p-8 rounded-3xl w-80 text-center animate-bounce-in shadow-2xl">
-                  <h3 className="font-bold text-lg mb-4">{selectedItem.name}</h3>
+                  <h3 className="font-bold text-lg mb-4 text-gray-800">{selectedItem.name}</h3>
                   <div className="border-2 border-dashed border-gray-200 p-4 rounded-xl inline-block bg-white">
                     <QRCode value={`SP-${selectedItem.id}`} size={160}/>
                   </div>
@@ -256,8 +291,12 @@ function App() {
                         <div className="flex gap-3"><input name="salary" type="number" placeholder="Lương cứng" className="bg-gray-50 border-none p-4 rounded-xl flex-1 font-medium"/> <input name="commission" type="number" placeholder="% HH" className="bg-gray-50 border-none p-4 rounded-xl w-24 font-medium"/></div>
                      </>}
 
-                     <button disabled={isUploading} className={`w-full text-white py-4 rounded-xl font-bold shadow-lg shadow-blue-200 mt-2 transition transform active:scale-95 ${isUploading ? 'bg-gray-300' : 'bg-blue-600 hover:bg-blue-700'}`}>
-                        {isUploading ? 'ĐANG XỬ LÝ...' : 'LƯU DỮ LIỆU'}
+                     {/* NÚT BẤM KHOÁ KHI ĐANG XỬ LÝ */}
+                     <button 
+                        disabled={isUploading || isSaving} 
+                        className={`w-full text-white py-4 rounded-xl font-bold shadow-lg shadow-blue-200 mt-2 transition transform active:scale-95 flex justify-center items-center gap-2 
+                        ${(isUploading || isSaving) ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                        {isSaving ? 'ĐANG LƯU DỮ LIỆU...' : isUploading ? 'ĐANG XỬ LÝ ẢNH...' : 'LƯU DỮ LIỆU'}
                      </button>
                   </form>
                </div>
